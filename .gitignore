@@ -1,0 +1,81 @@
+# =====================================================================
+# .gitignore – übernommen aus app/.gitignore (AIP) und für dieses Projekt erweitert
+# =====================================================================
+
+# --- Secrets – niemals committen --------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.jks
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+secrets/
+
+# --- Application specific (Spring) ------------------------------------
+application-local.properties
+application-local.yml
+
+# --- Maven ------------------------------------------------------------
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+
+# --- Terraform --------------------------------------------------------
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+crash.log
+tfplan
+
+# --- IDEs -------------------------------------------------------------
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+out/
+# Eclipse
+.classpath
+.project
+.settings/
+bin/
+# VS Code
+.vscode/
+# NetBeans
+nbproject/
+build/
+nbbuild/
+dist/
+nbdist/
+
+# --- Betriebssystem ---------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# --- Logs, Tests, Temp ------------------------------------------------
+*.log
+logs/
+*.exec
+jacoco/
+coverage/
+*.tmp
+*.bak
+*.swp
+*~
+__pycache__/
+node_modules/
