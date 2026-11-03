@@ -1,0 +1,524 @@
+package com.uni.gamesever.domain.game;
+
+import com.uni.gamesever.domain.enums.BonusType;
+import com.uni.gamesever.domain.enums.DirectionType;
+import com.uni.gamesever.domain.enums.TileType;
+import com.uni.gamesever.domain.exceptions.*;
+import com.uni.gamesever.domain.model.*;
+import com.uni.gamesever.infrastructure.GameTimerManager;
+import com.uni.gamesever.infrastructure.ReconnectTimerManager;
+import com.uni.gamesever.services.SocketMessageService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.*;
+
+public class GameManagerTest {
+
+    @Mock
+    PlayerManager playerManager;
+
+    @Mock
+    SocketMessageService socketBroadcastService;
+
+    @Mock
+    GameStatsManager gameStatsManager;
+
+    @Mock
+    BoardItemPlacementService boardItemPlacementService;
+
+    @Mock
+    GameTimerManager gameTimerManager;
+
+    @Mock
+    AchievementManager achievementManager;
+
+    @Mock
+    TurnTimer turnTimer;
+
+    @Mock
+    ReconnectTimerManager reconnectTimerManager;
+
+    @InjectMocks
+    GameManager gameManager;
+
+    PlayerInfo player1;
+    PlayerInfo player2;
+    PlayerState state1;
+    PlayerState state2;
+    GameBoard board;
+
+    @BeforeEach
+    void GameManagerTest_setup() throws Exception {
+        MockitoAnnotations.openMocks(this);
+
+        player1 = new PlayerInfo("player1");
+        player2 = new PlayerInfo("player2");
+
+        state1 = new PlayerState(player1, null, null, null, 0);
+        state2 = new PlayerState(player2, null, null, null, 0);
+
+        when(playerManager.getCurrentPlayer()).thenReturn(player1);
+        when(playerManager.getNonNullPlayerStates()).thenReturn(new PlayerState[]{state1, state2});
+
+        board = GameBoard.generateBoard(new BoardSize());
+        gameManager.setCurrentBoard(board);
+
+        when(playerManager.getCurrentPlayer()).thenReturn(player1);
+        when(playerManager.getCurrentPlayerState()).thenReturn(state1);
+        when(playerManager.getNonNullPlayerStates()).thenReturn(new PlayerState[]{state1, state2});
+    }
+
+    @Test
+    void GameManagerTest_handlePushTile_shouldUpdateBoardAndSetLastPush() throws Exception {
+        int rowOrColIndex = 1;
+        DirectionType direction = DirectionType.UP;
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+        when(playerManager.getCurrentPlayer()).thenReturn(player1);
+        state1.setCurrentPosition(new Coordinates(0, 0));
+        state2.setCurrentPosition(new Coordinates(1, 1));
+        when(playerManager.getPlayerStates()).thenReturn(new PlayerState[]{state1, state2});
+
+        boolean result = gameManager.handlePushTile(rowOrColIndex, direction, player1.getId(), false);
+
+        PushActionInfo lastPush = gameManager.getCurrentBoard().getLastPush();
+
+        assertTrue(result, "Push should return true");
+        assertNotNull(lastPush, "Last push info should be set");
+        assertEquals(rowOrColIndex, lastPush.getRowOrColIndex(), "Row/Col index should match pushed index");
+        assertEquals(direction, lastPush.getDirection(), "Direction should match pushed direction");
+    }
+
+    @Test
+    void GameManagerTest_handlePushTile_shouldThrowIfGameInactive() {
+        gameManager.getTurnInfo().setState(TurnState.NOT_STARTED);
+
+        assertThrows(GameNotValidException.class, () -> {
+            gameManager.handlePushTile(1, DirectionType.UP, player1.getId(), false);
+        });
+    }
+
+    @Test
+    void GameManagerTest_handlePushTile_shouldThrowIfNotPlayersTurn() {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+        assertThrows(NotPlayersTurnException.class, () -> {
+            gameManager.handlePushTile(1, DirectionType.UP, "otherPlayer", false);
+        });
+    }
+
+    @Test
+    void GameManagerTest_handlePushTile_shouldThrowIfOppositeDirectionRepeated() {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+        int index = 1;
+        gameManager.getCurrentBoard().setLastPush(new PushActionInfo(index));
+        gameManager.getCurrentBoard().getLastPush().setDirections("UP");
+
+        assertThrows(PushNotValidException.class, () -> {
+            gameManager.handlePushTile(index, DirectionType.DOWN, player1.getId(), false);
+        });
+    }
+
+    @Test
+    void GameManagerTest_isOppositeDirection_shouldReturnTrueForOppositePairs() {
+        assertTrue(gameManager.isOppositeDirection(DirectionType.UP, DirectionType.DOWN));
+        assertTrue(gameManager.isOppositeDirection(DirectionType.DOWN, DirectionType.UP));
+        assertTrue(gameManager.isOppositeDirection(DirectionType.LEFT, DirectionType.RIGHT));
+        assertTrue(gameManager.isOppositeDirection(DirectionType.RIGHT, DirectionType.LEFT));
+    }
+
+    @Test
+    void GameManagerTest_isOppositeDirection_shouldReturnFalseForNonOppositePairs() {
+        assertFalse(gameManager.isOppositeDirection(DirectionType.UP, DirectionType.LEFT));
+        assertFalse(gameManager.isOppositeDirection(DirectionType.DOWN, DirectionType.RIGHT));
+        assertFalse(gameManager.isOppositeDirection(DirectionType.LEFT, DirectionType.UP));
+        assertFalse(gameManager.isOppositeDirection(DirectionType.RIGHT, DirectionType.DOWN));
+    }
+
+    @Test
+    void GameManagerTest_updateBoard_shouldShiftColumnUpCorrectly() throws Exception {
+        board.setSpareTile(new Tile(List.of(DirectionType.UP, DirectionType.RIGHT), TileType.CORNER));
+        Tile topBefore = board.getTiles()[0][1];
+        Tile spareBefore = board.getSpareTile();
+
+        board.pushTile(1, DirectionType.UP, false);
+
+        assertEquals(topBefore, board.getSpareTile(), "Top tile becomes spare");
+        assertEquals(spareBefore, board.getTiles()[board.getRows() - 1][1], "Spare tile inserted at bottom");
+    }
+
+    @Test
+    void GameManagerTest_updateBoard_shouldThrowIfExtraTileNull() {
+        board.setSpareTile(null);
+
+        assertThrows(Exception.class, () -> board.pushTile(1, DirectionType.UP, false));
+    }
+
+    @Test
+    void GameManagerTest_updateBoard_shouldThrowIfFixedTile() {
+        board.getTiles()[0][1].setisFixed(true);
+        board.setSpareTile(new Tile(List.of(DirectionType.UP, DirectionType.RIGHT), TileType.CORNER));
+
+        assertThrows(IllegalArgumentException.class, () -> board.pushTile(1, DirectionType.UP, false));
+    }
+
+    @Test
+    void GameManagerTest_updateBoard_shouldThrowIfIndexOutOfBounds() {
+        board.setSpareTile(new Tile(List.of(DirectionType.UP, DirectionType.RIGHT), TileType.CORNER));
+
+        assertThrows(IllegalArgumentException.class, () -> board.pushTile(-1, DirectionType.UP, false));
+        assertThrows(IllegalArgumentException.class, () -> board.pushTile(100, DirectionType.LEFT, false));
+    }
+
+    @Test
+    void GameManagerTest_canPlayerMove_shouldReturnTrueIfStartEqualsTarget() {
+        Coordinates pos = new Coordinates(0, 0);
+
+        when(playerManager.getPlayerStatesOfPlayersNotOnTurn()).thenReturn(new PlayerState[]{});
+
+        assertTrue(gameManager.canPlayerMove(board, pos, pos), "It should return true when start and target are the same");
+    }
+
+    @Test
+    void GameManagerTest_canPlayerMove_shouldReturnTrueIfPathExists() {
+        Tile t0 = new Tile(List.of(DirectionType.UP, DirectionType.RIGHT), TileType.CORNER);
+        Tile t1 = new Tile(List.of(DirectionType.LEFT, DirectionType.DOWN), TileType.CORNER);
+
+        board.setTile(0, 0, t0);
+        board.setTile(0, 1, t1);
+        Coordinates start = new Coordinates(0, 0);
+        Coordinates target = new Coordinates(1, 0);
+
+        when(playerManager.getPlayerStatesOfPlayersNotOnTurn()).thenReturn(new PlayerState[]{});
+
+        assertTrue(gameManager.canPlayerMove(board, start, target), "It should return true when a valid path exists");
+    }
+
+    @Test
+    void GameManagerTest_canPlayerMove_shouldReturnFalseIfPathBlocked() {
+        for (int r = 0; r < board.getRows(); r++) {
+            for (int c = 0; c < board.getCols(); c++) {
+                board.setTile(r, c, null);
+            }
+        }
+        Tile t0 = new Tile(List.of(DirectionType.RIGHT, DirectionType.LEFT), TileType.STRAIGHT);
+        Tile t1 = new Tile(List.of(DirectionType.UP, DirectionType.RIGHT), TileType.CORNER);
+
+        board.setTile(0, 0, t1);
+        board.setTile(1, 0, t0);
+
+        Coordinates start = new Coordinates(0, 0);
+        Coordinates target = new Coordinates(1, 0);
+
+        when(playerManager.getPlayerStatesOfPlayersNotOnTurn()).thenReturn(new PlayerState[]{});
+
+        assertFalse(gameManager.canPlayerMove(board, start, target), "It should return false when no valid path exists");
+    }
+
+    @Test
+    void GameManagerTest_canPlayerMove_shouldHandleMultipleSteps() {
+        Tile t1 = new Tile(List.of(DirectionType.LEFT, DirectionType.RIGHT), TileType.STRAIGHT);
+        Tile t2 = new Tile(List.of(DirectionType.LEFT, DirectionType.DOWN), TileType.CORNER);
+        Tile t3 = new Tile(List.of(DirectionType.UP, DirectionType.DOWN), TileType.STRAIGHT);
+
+        board.setTile(0, 0, t1);
+        board.setTile(0, 1, t2);
+        board.setTile(1, 1, t3);
+
+        Coordinates start = new Coordinates(0, 0);
+        Coordinates target = new Coordinates(1, 1);
+
+        when(playerManager.getPlayerStatesOfPlayersNotOnTurn()).thenReturn(new PlayerState[]{});
+
+        assertTrue(gameManager.canPlayerMove(board, start, target), "It should return true when a valid path exists");
+    }
+
+    @Test
+    void GameManagerTest_canPlayerMove_shouldReturnFalseIfTileNull() {
+        board.setTile(0, 0, null);
+
+        Coordinates start = new Coordinates(0, 0);
+        Coordinates target = new Coordinates(0, 1);
+
+        when(playerManager.getPlayerStatesOfPlayersNotOnTurn()).thenReturn(new PlayerState[]{});
+
+        assertFalse(gameManager.canPlayerMove(board, start, target), "It should return false when no valid path exists");
+    }
+
+    @Test
+    void GameManagerTest_updatePlayerPositionsAfterPush_shouldMovePlayerUp() throws Exception {
+        PlayerState p = new PlayerState(player1, null, null, null, 0);
+        p.setCurrentPosition(new Coordinates(1, 1));
+
+        when(playerManager.getNonNullPlayerStates()).thenReturn(new PlayerState[]{p});
+
+        gameManager.setCurrentBoard(board);
+        board.setSpareTile(new Tile(List.of(DirectionType.UP), TileType.STRAIGHT));
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+
+        gameManager.handlePushTile(1, DirectionType.UP, player1.getId(), false);
+
+        assertEquals(0, p.getCurrentPosition().getRow(), "Player should move up by 1");
+        assertEquals(1, p.getCurrentPosition().getColumn());
+    }
+
+    @Test
+    void GameManagerTest_updatePlayerPositionsAfterPush_shouldWrapWhenPushedUp() throws Exception {
+        int rows = board.getRows();
+
+        PlayerState p = new PlayerState(player1, null, null, null, 0);
+        p.setCurrentPosition(new Coordinates(1, 0));
+
+        when(playerManager.getNonNullPlayerStates()).thenReturn(new PlayerState[]{p});
+
+        board.setSpareTile(new Tile(List.of(DirectionType.UP), TileType.STRAIGHT));
+        gameManager.setCurrentBoard(board);
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+
+        gameManager.handlePushTile(1, DirectionType.UP, player1.getId(), false);
+
+        assertEquals(rows - 1, p.getCurrentPosition().getRow(), "Player pushed off top should reappear at bottom");
+        assertEquals(1, p.getCurrentPosition().getColumn());
+    }
+
+    @Test
+    void GameManagerTest_updatePlayerPositionsAfterPush_shouldMovePlayerDown() throws Exception {
+        PlayerState p = new PlayerState(player1, null, null, null, 0);
+        p.setCurrentPosition(new Coordinates(3, 1));
+
+        when(playerManager.getNonNullPlayerStates()).thenReturn(new PlayerState[]{p});
+
+        board.setSpareTile(new Tile(List.of(DirectionType.DOWN), TileType.STRAIGHT));
+        gameManager.setCurrentBoard(board);
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+
+        gameManager.handlePushTile(3, DirectionType.DOWN, player1.getId(), false);
+
+        assertEquals(2, p.getCurrentPosition().getRow());
+        assertEquals(3, p.getCurrentPosition().getColumn());
+    }
+
+    @Test
+    void GameManagerTest_updatePlayerPositionsAfterPush_shouldWrapWhenPushedRight() throws Exception {
+        PlayerState p = new PlayerState(player1, null, null, null, 0);
+        p.setCurrentPosition(new Coordinates(6, 1));
+
+        when(playerManager.getNonNullPlayerStates()).thenReturn(new PlayerState[]{p});
+
+        board.setSpareTile(new Tile(List.of(DirectionType.LEFT), TileType.STRAIGHT));
+        gameManager.setCurrentBoard(board);
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+
+        gameManager.handlePushTile(1, DirectionType.RIGHT, player1.getId(), false);
+
+        assertEquals(1, p.getCurrentPosition().getRow());
+        assertEquals(0, p.getCurrentPosition().getColumn(), "Player pushed off right should reappear at left edge");
+    }
+
+    @Test
+    void GameManagerTest_updatePlayerPositionsAfterPush_shouldNotMoveUnrelatedPlayer() throws Exception {
+        PlayerState p = new PlayerState(player1, null, null, null, 0);
+        p.setCurrentPosition(new Coordinates(4, 4));
+
+        when(playerManager.getNonNullPlayerStates()).thenReturn(new PlayerState[]{p});
+
+        board.setSpareTile(new Tile(List.of(DirectionType.UP), TileType.STRAIGHT));
+        gameManager.setCurrentBoard(board);
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+
+        gameManager.handlePushTile(1, DirectionType.UP, player1.getId(), false);
+
+        assertEquals(4, p.getCurrentPosition().getColumn());
+        assertEquals(4, p.getCurrentPosition().getRow());
+    }
+
+    @Test
+    void handleMovePawn_shouldEndGameOnlyAfterReturningHomeWithNoTreasure() throws Exception {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_MOVE);
+
+        gameManager.setCurrentBoard(board);
+
+        Coordinates home = new Coordinates(0, 0);
+        Coordinates treasurePos = new Coordinates(0, 1);
+
+        state1.setHomePosition(home);
+        state1.setCurrentPosition(home);
+
+        Treasure treasure = new Treasure(1, "Last Treasure");
+        state1.setCurrentTreasure(treasure);
+
+        Tile homeTile = new Tile(List.of(DirectionType.DOWN, DirectionType.RIGHT), TileType.CORNER);
+
+        Tile treasureTile = new Tile(List.of(DirectionType.UP, DirectionType.DOWN), TileType.STRAIGHT);
+        treasureTile.setTreasure(treasure);
+
+        board.setTile(0, 0, homeTile);
+        board.setTile(1, 0, treasureTile);
+
+        when(playerManager.getCurrentPlayerState()).thenReturn(state1);
+        when(playerManager.getCurrentPlayer()).thenReturn(player1);
+        when(playerManager.getNonNullPlayerStates()).thenReturn(new PlayerState[]{state1});
+        when(playerManager.getPlayerStatesOfPlayersNotOnTurn()).thenReturn(new PlayerState[]{});
+        when(playerManager.getNonNullPlayers()).thenReturn(new PlayerInfo[]{player1});
+
+        PlayerGameStats endStats = new PlayerGameStats(2, 0, 1);
+        RankingEntry finalRanking = new RankingEntry(player1, 1, 100, endStats);
+        when(gameStatsManager.getSortedRankings()).thenReturn(List.of(finalRanking));
+
+        boolean movedToTreasure = gameManager.handleMovePawn(treasurePos, player1.getId(), false);
+
+        assertTrue(movedToTreasure);
+        verify(gameStatsManager).increaseTreasuresCollected(1, player1.getId());
+
+        verify(socketBroadcastService, never()).broadcastMessage(argThat(msg -> msg.contains("GAME_OVER")));
+        reset(socketBroadcastService);
+
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_MOVE);
+        when(playerManager.getCurrentPlayer()).thenReturn(player1);
+
+        boolean movedHome = gameManager.handleMovePawn(home, player1.getId(), false);
+
+        assertTrue(movedHome);
+
+        verify(socketBroadcastService, atLeastOnce()).broadcastMessage(argThat(msg -> msg.contains("GAME_OVER")));
+        verify(socketBroadcastService, atLeastOnce()).broadcastMessage(argThat(msg -> msg.contains("GAME_STATE_UPDATE")));
+        verify(socketBroadcastService, atLeastOnce()).broadcastMessage(argThat(msg -> msg.contains("LOBBY_STATE")));
+
+        assertEquals(TurnState.NOT_STARTED, gameManager.getTurnInfo().getState());
+    }
+
+    @Test
+    void handleUsePushTwice_shouldConsumeBonusAndAllowSecondPush() throws Exception {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+
+        Bonus pushTwiceBonus = new Bonus();
+        pushTwiceBonus.setType(BonusType.PUSH_TWICE);
+        state1.collectBonus(pushTwiceBonus);
+
+        boolean result = gameManager.handleUsePushTwice(player1.getId());
+
+        assertTrue(result);
+        assertFalse(state1.hasBonusOfType(BonusType.PUSH_TWICE), "Bonus should be consumed");
+    }
+
+    @Test
+    void handleUsePushTwice_shouldThrowIfNoBonus() {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+
+        assertThrows(BonusNotAvailable.class, () -> gameManager.handleUsePushTwice(player1.getId()));
+    }
+
+    @Test
+    void handleUsePushFixedTile_shouldConsumeBonusAndPushFixedTile() throws Exception {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+
+        state1.setCurrentPosition(new Coordinates(1, 1));
+        state2.setCurrentPosition(new Coordinates(3, 3));
+
+        Bonus pushFixedBonus = new Bonus();
+        pushFixedBonus.setType(BonusType.PUSH_FIXED);
+        state1.collectBonus(pushFixedBonus);
+        board.setSpareTile(new Tile(List.of(DirectionType.UP), TileType.STRAIGHT));
+
+        boolean result = gameManager.handleUsePushFixedTile(DirectionType.UP, 1, player1.getId());
+
+        assertTrue(result);
+        assertFalse(state1.hasBonusOfType(BonusType.PUSH_FIXED));
+    }
+
+    @Test
+    void handleUseSwap_shouldSwapPlayerPositions() throws Exception {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+        Bonus swapBonus = new Bonus();
+        swapBonus.setType(BonusType.SWAP);
+        state1.collectBonus(swapBonus);
+
+        state1.setCurrentPosition(new Coordinates(1, 1));
+        state2.setCurrentPosition(new Coordinates(3, 3));
+
+        when(playerManager.getPlayerStateById(player2.getId())).thenReturn(state2);
+
+        boolean result = gameManager.handleUseSwap(player2.getId(), player1.getId());
+
+        assertTrue(result);
+        assertEquals(3, state1.getCurrentPosition().getColumn());
+        assertEquals(3, state1.getCurrentPosition().getRow());
+        assertEquals(1, state2.getCurrentPosition().getColumn());
+        assertEquals(1, state2.getCurrentPosition().getRow());
+    }
+
+    @Test
+    void handleUseSwap_shouldThrowIfSwapWithSelf() {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+        Bonus swapBonus = new Bonus();
+        swapBonus.setType(BonusType.SWAP);
+        state1.collectBonus(swapBonus);
+
+        assertThrows(NoValidActionException.class, () -> gameManager.handleUseSwap(player1.getId(), player1.getId()));
+    }
+
+    @Test
+    void handleUseBeam_shouldConsumeBonusAndMovePawn() throws Exception {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+        Bonus beamBonus = new Bonus();
+        beamBonus.setType(BonusType.BEAM);
+        state1.collectBonus(beamBonus);
+        state1.setCurrentPosition(new Coordinates(0, 0));
+        state1.setHomePosition(new Coordinates(0, 0));
+
+        Tile start = new Tile(List.of(DirectionType.RIGHT), TileType.STRAIGHT);
+        Tile target = new Tile(List.of(DirectionType.LEFT), TileType.STRAIGHT);
+
+        board.setTile(0, 0, start);
+        board.setTile(0, 1, target);
+
+        when(playerManager.getPlayerStatesOfPlayersNotOnTurn()).thenReturn(new PlayerState[]{});
+
+        boolean result = gameManager.handleUseBeam(new Coordinates(1, 0), player1.getId());
+
+        assertTrue(result);
+        assertFalse(state1.hasBonusOfType(BonusType.BEAM));
+    }
+
+    @Test
+    void handleUseBeam_shouldThrowIfNoBeamBonus() {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+
+        assertThrows(BonusNotAvailable.class, () -> gameManager.handleUseBeam(new Coordinates(1, 1), player1.getId()));
+    }
+
+    @Test
+    void handleMovePawn_shouldNotCollectBonusIfPlayerAlreadyHasFive() throws Exception {
+        gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_MOVE);
+
+        for (int i = 0; i < 5; i++) {
+            Bonus bonus1 = new Bonus();
+            bonus1.setType(BonusType.BEAM);
+            state1.collectBonus(bonus1);
+        }
+
+        state1.setCurrentPosition(new Coordinates(0, 0));
+        state1.setHomePosition(new Coordinates(0, 0));
+
+        Tile start = new Tile(List.of(DirectionType.RIGHT), TileType.STRAIGHT);
+        Tile target = new Tile(List.of(DirectionType.LEFT), TileType.STRAIGHT);
+        Bonus bonus2 = new Bonus();
+        bonus2.setType(BonusType.SWAP);
+        target.setBonus(bonus2);
+
+        board.setTile(0, 0, start);
+        board.setTile(0, 1, target);
+
+        when(playerManager.getPlayerStatesOfPlayersNotOnTurn()).thenReturn(new PlayerState[]{});
+
+        gameManager.handleMovePawn(new Coordinates(1, 0), player1.getId(), false);
+
+        assertEquals(5, state1.getAvailableBonuses().length, "Player should not collect more than 5 bonuses");
+    }
+}

@@ -1,0 +1,171 @@
+package com.uni.gamesever.interfaces.Websocket;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.uni.gamesever.domain.ai.ServerAIManager;
+import com.uni.gamesever.domain.enums.LobbyStateEnum;
+import com.uni.gamesever.domain.exceptions.GameAlreadyStartedException;
+import com.uni.gamesever.infrastructure.ReconnectTimerManager;
+import com.uni.gamesever.domain.exceptions.GameFullException;
+import com.uni.gamesever.domain.exceptions.UserNotFoundException;
+import com.uni.gamesever.domain.exceptions.UsernameAlreadyTakenException;
+import com.uni.gamesever.domain.exceptions.UsernameNullOrEmptyException;
+import com.uni.gamesever.domain.game.GameManager;
+import com.uni.gamesever.domain.game.PlayerManager;
+import com.uni.gamesever.domain.model.PlayerInfo;
+import com.uni.gamesever.domain.model.TurnState;
+import com.uni.gamesever.interfaces.Websocket.messages.client.ConnectRequest;
+import com.uni.gamesever.interfaces.Websocket.messages.server.ConnectAck;
+import com.uni.gamesever.interfaces.Websocket.messages.server.GameStateUpdate;
+import com.uni.gamesever.interfaces.Websocket.messages.server.LobbyState;
+import com.uni.gamesever.interfaces.Websocket.messages.server.NextTreasureCardEvent;
+import com.uni.gamesever.interfaces.Websocket.messages.server.PlayerUpdateEvent;
+import com.uni.gamesever.services.SocketMessageService;
+
+@Service
+public class ConnectionHandler {
+    private final PlayerManager playerManager;
+    private final GameManager gameManager;
+    private final SocketMessageService socketMessageService;
+    private final ServerAIManager serverAIManager;
+    private final ReconnectTimerManager reconnectTimerManager;
+    private final ObjectMapper objectMapper = ObjectMapperSingleton.getInstance();
+    private static final Logger log = LoggerFactory.getLogger("GAME_LOG");
+
+    public ConnectionHandler(PlayerManager playerManager, GameManager gameManager,
+            SocketMessageService socketMessageService, ServerAIManager serverAIManager,
+            ReconnectTimerManager reconnectTimerManager) {
+        this.playerManager = playerManager;
+        this.gameManager = gameManager;
+        this.socketMessageService = socketMessageService;
+        this.serverAIManager = serverAIManager;
+        this.reconnectTimerManager = reconnectTimerManager;
+    }
+
+    public boolean handleConnectMessage(ConnectRequest request, String userId)
+            throws JsonProcessingException, GameFullException, IllegalArgumentException, UsernameNullOrEmptyException,
+            UsernameAlreadyTakenException, UserNotFoundException, GameAlreadyStartedException {
+        if (request.getUsername() == null || request.getUsername().isEmpty()) {
+            throw new UsernameNullOrEmptyException("Der Benutzername darf nicht leer sein.");
+        }
+        if (request.getIdentifierToken() != null && !request.getIdentifierToken().isEmpty()) {
+            // WICHTIG: Hole die ALTE Session ID BEVOR reconnectPlayer() sie ändert!
+            PlayerInfo existingPlayer = playerManager.getPlayerByIdentifierToken(request.getIdentifierToken());
+            String oldSessionId = existingPlayer != null ? existingPlayer.getId() : null;
+
+            if (playerManager.reconnectPlayer(request.getIdentifierToken(), userId)) {
+                // STOP RECONNECT TIMER mit der ALTEN Session ID!
+                if (oldSessionId != null) {
+                    reconnectTimerManager.stop(oldSessionId);
+                    System.out.println("⏱️  Stopped reconnect timer for old session: " + oldSessionId);
+                }
+
+                // DEACTIVATE AI WHEN PLAYER RECONNECTS
+                // WICHTIG: Deaktiviere AI für die ALTE Player ID (identifierToken), nicht die
+                // neue Session ID!
+                serverAIManager.deactivateAI(request.getIdentifierToken());
+
+                // Setze isAIControlled Flag auf false
+                PlayerInfo reconnectedPlayer = playerManager.getPlayerById(userId);
+                if (reconnectedPlayer != null) {
+                    reconnectedPlayer.setIsAiControlled(false);
+                }
+
+                System.out.println("🤖 AI deactivated for reconnected player: " + request.getIdentifierToken() + " (new session: " + userId + ")");
+                log.info("User {} hat sich als {} wiederverbunden", userId, request.getUsername());
+                ConnectAck connectionAck = new ConnectAck(userId, request.getIdentifierToken());
+                socketMessageService.sendMessageToSession(userId, objectMapper.writeValueAsString(connectionAck));
+                NextTreasureCardEvent nextTreasureCardEvent = new NextTreasureCardEvent(
+                        playerManager.getPlayerStateById(userId).getCurrentTreasure());
+                socketMessageService.sendMessageToSession(userId,
+                        objectMapper.writeValueAsString(nextTreasureCardEvent));
+                GameStateUpdate gameStateUpdate = new GameStateUpdate(gameManager.getCurrentBoard(),
+                        playerManager.getNonNullPlayerStates(),
+                        gameManager.getTurnInfo(), gameManager.getGameEndTime());
+                socketMessageService.broadcastMessage(objectMapper.writeValueAsString(gameStateUpdate));
+                return true;
+            }
+        }
+        if (gameManager.getLobbyState() != LobbyStateEnum.LOBBY) {
+            throw new GameAlreadyStartedException(
+                    "Das Spiel hat bereits begonnen. Ein Beitritt ist nicht mehr möglich.");
+        }
+        PlayerInfo newPlayer = new PlayerInfo(userId);
+        newPlayer.setName(request.getUsername());
+        newPlayer.setIdentifierToken(userId); // Setze identifierToken beim ersten Connect
+        if (playerManager.addPlayer(newPlayer)) {
+            log.info("User {} hat sich als {} verbunden", userId, request.getUsername());
+            ConnectAck connectionAck = new ConnectAck(newPlayer.getId(), newPlayer.getIdentifierToken());
+            socketMessageService.sendMessageToSession(userId, objectMapper.writeValueAsString(connectionAck));
+
+            LobbyState lobbyState = new LobbyState(playerManager.getNonNullPlayers());
+            socketMessageService.broadcastMessage(objectMapper.writeValueAsString(lobbyState));
+        } else {
+            System.err.println("Game is full. User " + userId + " cannot join.");
+            throw new GameFullException("Das Spiel ist voll. Beitritt nicht möglich.");
+        }
+
+        return true;
+    }
+
+    public boolean handleIntentionalDisconnectOrAfterTimeOut(String userId)
+            throws UserNotFoundException, JsonProcessingException {
+        if (userId == null || userId.isEmpty()) {
+            throw new UserNotFoundException("Die Benutzer-ID darf nicht null oder leer sein.");
+        }
+        if (gameManager.getTurnInfo().getState() != TurnState.NOT_STARTED) {
+            if (playerManager.getCurrentPlayer().getId().equals(userId)) {
+                playerManager.setNextPlayerAsCurrent();
+                playerManager.removePlayer(userId);
+                if (playerManager.getNonNullPlayers().length == 0) {
+                    gameManager.endGameByTimeoutOrAfterCollectingAllTreasures();
+                    return true;
+                }
+
+                gameManager.getTurnInfo().setState(TurnState.WAITING_FOR_PUSH);
+                gameManager.getTurnInfo().setCurrentPlayerId(playerManager.getCurrentPlayer().getId());
+
+                gameManager.resetAllVariablesForNextTurn();
+                GameStateUpdate gameStatUpdate = new GameStateUpdate(gameManager.getCurrentBoard(),
+                        playerManager.getNonNullPlayerStates(),
+                        gameManager.getTurnInfo(), gameManager.getGameEndTime());
+                socketMessageService.broadcastMessage(objectMapper.writeValueAsString(gameStatUpdate));
+            } else {
+                playerManager.removePlayer(userId);
+
+                if (playerManager.getNonNullPlayers().length == 0) {
+                    gameManager.endGameByTimeoutOrAfterCollectingAllTreasures();
+                    return true;
+                }
+
+                GameStateUpdate gameStatUpdate = new GameStateUpdate(gameManager.getCurrentBoard(),
+                        playerManager.getNonNullPlayerStates(),
+                        gameManager.getTurnInfo(), gameManager.getGameEndTime());
+                socketMessageService.broadcastMessage(objectMapper.writeValueAsString(gameStatUpdate));
+
+            }
+        } else {
+            playerManager.removePlayer(userId);
+            LobbyState lobbyState = new LobbyState(playerManager.getNonNullPlayers());
+            socketMessageService.broadcastMessage(objectMapper.writeValueAsString(lobbyState));
+        }
+        return true;
+    }
+
+    public boolean handleSituationWhenTheConnectionIsLost(String userId)
+            throws IllegalArgumentException, UserNotFoundException, JsonProcessingException {
+        if (userId == null || userId.isEmpty()) {
+            throw new UserNotFoundException("Die Benutzer-ID darf nicht null oder leer sein.");
+        }
+        playerManager.disconnectPlayer(userId);
+        PlayerUpdateEvent playerUpdateEvent = new PlayerUpdateEvent(
+                playerManager.getPlayerById(userId));
+        socketMessageService.broadcastMessage(objectMapper.writeValueAsString(playerUpdateEvent));
+
+        return true;
+    }
+}
