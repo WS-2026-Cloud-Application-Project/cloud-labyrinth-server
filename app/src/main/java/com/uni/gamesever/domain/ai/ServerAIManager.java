@@ -37,7 +37,7 @@ public class ServerAIManager {
 
     /**
      * Activates AI for a player when they disconnect
-     * 
+     *
      * @param identifierToken Der fixe Token des Spielers
      */
     public void activateAI(String identifierToken) {
@@ -58,7 +58,7 @@ public class ServerAIManager {
 
     /**
      * Deactivates AI when player reconnects
-     * 
+     *
      * @param identifierToken Der fixe Token des Spielers
      */
     public void deactivateAI(String identifierToken) {
@@ -69,7 +69,7 @@ public class ServerAIManager {
 
     /**
      * Checks if AI should control this player
-     * 
+     *
      * @param identifierToken Der fixe Token des Spielers
      */
     public boolean isAIActive(String identifierToken) {
@@ -78,7 +78,7 @@ public class ServerAIManager {
 
     /**
      * Executes AI turn for disconnected player
-     * 
+     *
      * @param identifierToken Der fixe Token des Spielers
      */
     public void executeAITurn(String identifierToken) throws Exception {
@@ -115,7 +115,7 @@ public class ServerAIManager {
 
     /**
      * Builds GameState from server models
-     * 
+     *
      * @param identifierToken Der fixe Token des Spielers (ändert sich nicht bei
      *                        Reconnect)
      */
@@ -157,7 +157,7 @@ public class ServerAIManager {
 
     /**
      * Executes AI decision through GameManager
-     * 
+     *
      * @param identifierToken Der fixe Token des Spielers
      */
     private void executeDecision(String identifierToken, AIDecision decision, GameState gameState) throws Exception {
@@ -181,7 +181,7 @@ public class ServerAIManager {
 
     /**
      * Executes PUSH phase of AI decision
-     * 
+     *
      * @param identifierToken  Der fixe Token (für AI-Status-Check)
      * @param currentSessionId Die aktuelle Session ID (für GameManager calls)
      */
@@ -287,7 +287,7 @@ public class ServerAIManager {
 
     /**
      * Executes MOVE phase of AI decision
-     * 
+     *
      * @param identifierToken  Der fixe Token (für AI-Status-Check)
      * @param currentSessionId Die aktuelle Session ID (für GameManager calls)
      */
@@ -346,7 +346,7 @@ public class ServerAIManager {
 
     /**
      * Fallback: execute random valid move when AI fails
-     * 
+     *
      * @param identifierToken Der fixe Token des Spielers
      */
     private void executeRandomFallback(String identifierToken) {
