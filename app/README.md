@@ -2,13 +2,13 @@
 
 ![Build Status](https://github.com/AIP-Labyrinth-Group3/labyrinth-server/workflows/Server%20CI/badge.svg)
 
-Spring Boot WebSocket-Game-Server für **„Das verrückte Labyrinth“** (MCI AIP Projekt WS 2025/26).  
+Spring Boot WebSocket-Game-Server für **„Das verrückte Labyrinth“** (MCI AIP Projekt WS 2025/26).
 Der Server ist die **Single Source of Truth**: Clients senden Intentionen/Aktionen, der Server validiert und broadcastet den konsistenten Spielzustand.
 
 ## Status
 
 
-**Core Gameplay implementiert** (Lobby, Spielstart, Tile/Pawn Moves, Bonus-Actions).  
+**Core Gameplay implementiert** (Lobby, Spielstart, Tile/Pawn Moves, Bonus-Actions).
 
 **Persistenz**: aktuell **In-Memory** (kein DB-Storage, State geht bei Restart verloren).
 

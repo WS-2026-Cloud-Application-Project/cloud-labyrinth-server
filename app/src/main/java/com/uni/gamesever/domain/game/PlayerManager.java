@@ -309,7 +309,7 @@ public class PlayerManager {
 
     /**
      * Prüft ob alle Spieler disconnected sind
-     * 
+     *
      * @return true wenn alle Spieler disconnected sind, false sonst
      */
     public boolean areAllPlayersDisconnected() {
